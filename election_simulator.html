@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>선거 시뮬레이터 (대통령 + 총선)</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font:13px/1.4 "Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",sans-serif;background:#f0f0f0;color:#111}
+#top{background:#2b3a55;padding:6px 10px;display:flex;gap:6px}#top button{padding:6px 16px;border:0;border-radius:4px;background:#4a5a7a;color:#fff;cursor:pointer}#top button.on{background:#fff;color:#111;font-weight:bold}
+.app{display:none;height:calc(100vh - 40px)}.app.on{display:flex}
+.left{width:430px;min-width:300px;padding:6px;display:flex;flex-direction:column;overflow:hidden;background:#fafafa;border-right:1px solid #ccc}.right{flex:1;padding:6px;display:flex;flex-direction:column;min-width:0}
+.tabs{display:flex;flex-wrap:wrap;gap:2px}.tabs button{border:1px solid #bbb;border-bottom:0;background:#ddd;padding:5px 12px;cursor:pointer;border-radius:4px 4px 0 0}.tabs button.on{background:#fff;font-weight:bold}
+.pane{display:none;flex:1;overflow:auto;background:#fff;border:1px solid #bbb;padding:8px;min-height:0}.pane.on{display:block}
+.pane.ch.on{display:flex;flex-direction:column}.pane.ch .svgw{flex:1;min-height:0}.pane svg{width:100%;height:100%}
+table{border-collapse:collapse}td,th{padding:1px 2px}input[type=text]{width:100%;padding:2px 4px}
+.pt{display:grid;grid-template-columns:1fr 110px;gap:3px 6px;align-items:center}
+button.go{margin-top:8px;padding:10px;font-size:14px;cursor:pointer}progress{width:100%}.st{margin:3px 0;word-break:break-all}
+pre{margin:0;font:12px Consolas,"D2Coding",monospace}.bar{display:flex;gap:8px;align-items:center;padding:4px}.bar input{flex:1}
+</style></head><body>
+<div id="top"></div><div id="apps"></div>
+<script>
+const $=(s,e=document)=>e.querySelector(s),esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const COL=["#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd","#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf"];
+// ---------- RNG / 수학
+let rnd;const mk=s=>{let a=(s==null?Math.random()*2**32:s)>>>0;return()=>{a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}};
+const nrm=()=>Math.sqrt(-2*Math.log(1-rnd()))*Math.cos(6.283185307179586*rnd()),rint=(a,b)=>a+Math.floor(rnd()*(b-a));
+const gam=a=>{if(a<1)return gam(a+1)*Math.pow(rnd(),1/a);const d=a-1/3,c=1/Math.sqrt(9*d);for(;;){let x,v;do{x=nrm();v=1+c*x}while(v<=0);v=v*v*v;if(Math.log(rnd())<.5*x*x+d-d*v+d*Math.log(v))return d*v}};
+const dir=al=>{const g=al.map(gam),s=g.reduce((a,b)=>a+b,0);return g.map(x=>x/s)};
+const sum=a=>{let s=0;for(const v of a)s+=v;return s},am=a=>{let b=0;for(let i=1;i<a.length;i++)if(a[i]>a[b])b=i;return b},clip=(v,a,b)=>Math.min(Math.max(v,a),b);
+const bc=(a,n)=>{const c=new Array(n).fill(0);for(const v of a)c[v]++;return c},asort=a=>[...a.keys()].sort((x,y)=>a[y]-a[x]||x-y);
+const pctl=(arr,q)=>{const s=Float64Array.from(arr).sort(),p=(s.length-1)*q/100,i=Math.floor(p);return s[i]+(s[Math.min(i+1,s.length-1)]-s[i])*(p-i)};
+const med=a=>pctl(a,50),tick=()=>new Promise(r=>setTimeout(r));
+const N=n=>Math.round(n).toLocaleString('en-US'),f=(x,d=2)=>(+x).toFixed(d),g=x=>String(+x),rj=(s,w)=>String(s).padStart(w),lj=(s,w)=>String(s).padEnd(w);
+const wl=s=>[...s].reduce((a,c)=>{const k=c.codePointAt(0);return a+((k>=0x1100&&k<=0x115F)||(k>=0x2E80&&k<=0xA4CF)||(k>=0xAC00&&k<=0xD7A3)||(k>=0xF900&&k<=0xFAFF)||(k>=0xFE30&&k<=0xFE6F)||(k>=0xFF00&&k<=0xFF60)||(k>=0xFFE0&&k<=0xFFE6)?2:1)},0),pad=(s,w)=>s+" ".repeat(Math.max(0,w-wl(s)));
+const rep=(c,n)=>c.repeat(Math.max(0,n));
+// ---------- SVG 차트 헬퍼
+function tk(lo,hi){const r=hi-lo||1,raw=r/6,m=Math.pow(10,Math.floor(Math.log10(raw))),st=[1,2,5,10].find(k=>k*m>=raw)*m,o=[];for(let v=Math.ceil(lo/st-1e-9)*st;v<=hi+1e-9;v+=st)o.push(+v.toFixed(8));return o}
+function G(o){const W=o.w,H=o.h,L=o.l??60,R=o.r??20,T=o.t??34,B=o.b??44,pw=W-L-R,ph=H-T-B,s=[];
+const X=v=>L+(v-o.x0)/(o.x1-o.x0)*pw,Y=v=>T+ph-(v-o.y0)/(o.y1-o.y0)*ph;
+const txt=(x,y,t,a='')=>String(t).split('\n').map((l,i)=>`<text x="${x}" y="${y+i*13}" ${a}>${esc(l)}</text>`).join('');
+const A=s.push.bind(s),q={X,Y,pw,ph,
+rect:(x0,x1,y0,y1,c,op=1)=>A(`<rect x="${Math.min(X(x0),X(x1))}" y="${Math.min(Y(y0),Y(y1))}" width="${Math.abs(X(x1)-X(x0))}" height="${Math.abs(Y(y1)-Y(y0))}" fill="${c}" fill-opacity="${op}"/>`),
+line:(x0,y0,x1,y1,c='#000',w=1,d='',px=0)=>A(`<line x1="${X(x0)}" y1="${Y(y0)}" x2="${X(x1)}" y2="${Y(y1)}" stroke="${c}" stroke-width="${w}" stroke-dasharray="${d}"/>`),
+poly:(xs,ys,c,m)=>{A(`<polyline fill="none" stroke="${c}" stroke-width="2" points="${xs.map((x,i)=>X(x)+','+Y(ys[i])).join(' ')}"/>`);if(m)xs.forEach((x,i)=>A(`<circle cx="${X(x)}" cy="${Y(ys[i])}" r="3.5" fill="${c}"/>`))},
+dot:(x,y,r,fill,st,op=1,sw=2)=>A(`<circle cx="${X(x)}" cy="${Y(y)}" r="${r}" fill="${fill}" fill-opacity="${op}" stroke="${st||'none'}" stroke-width="${sw}" stroke-opacity="${op}"/>`),
+sq:(x,y)=>A(`<rect x="${X(x)-3.5}" y="${Y(y)-3.5}" width="7" height="7"/>`),
+t:(x,y,t,dx=0,dy=0,a='')=>A(txt(X(x)+dx,Y(y)+dy+4,t,'font-size="11" '+a)),
+leg:(it,pos)=>{if(pos=='below'){let x=L+10;it.forEach(([c,l])=>{A(`<rect x="${x}" y="${H-16}" width="12" height="10" fill="${c}"/>`+txt(x+16,H-7,l,'font-size="11"'));x+=wl(l)*6+34});return}
+const w=Math.max(...it.map(i=>wl(i[1])))*6+34,x=W-R-w-4,y=pos=='tr'?T+6:T+ph-it.length*17-6;A(`<rect x="${x-4}" y="${y-4}" width="${w+4}" height="${it.length*17+4}" fill="#fff" fill-opacity=".85" stroke="#ccc"/>`);it.forEach(([c,l],i)=>A(`<rect x="${x}" y="${y+i*17}" width="12" height="10" fill="${c}"/>`+txt(x+17,y+i*17+9,l,'font-size="11"')))},
+out:()=>{let h=`<g transform="translate(${o.ox||0},0)"><line x1="${L}" y1="${T}" x2="${L}" y2="${T+ph}" stroke="#000"/><line x1="${L}" y1="${T+ph}" x2="${L+pw}" y2="${T+ph}" stroke="#000"/>`;
+(o.xt||tk(o.x0,o.x1).map(v=>[v,g(v)])).forEach(([v,l])=>h+=`<line x1="${X(v)}" y1="${T+ph}" x2="${X(v)}" y2="${T+ph+4}" stroke="#000"/>`+txt(X(v),T+ph+17,l,'font-size="11" text-anchor="middle"'));
+(o.yt||tk(o.y0,o.y1).map(v=>[v,g(v)])).forEach(([v,l])=>{const n=String(l).split('\n').length;h+=txt(L-6,Y(v)+4-(n-1)*6.5,l,'font-size="11" text-anchor="end"')});
+h+=txt(L+pw/2,T-12,o.title||'','font-size="13" text-anchor="middle" font-weight="bold"')+txt(L+pw/2,T+ph+(o.xb||36),o.xl||'','font-size="12" text-anchor="middle"');
+if(o.yl)h+=`<text transform="translate(14,${T+ph/2}) rotate(-90)" font-size="12" text-anchor="middle">${esc(o.yl)}</text>`;
+return h+s.join('')+'</g>'}};return q}
+const SV=(W,H,...gs)=>`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" font-family="inherit">${gs.map(x=>typeof x=='string'?x:x.out()).join('')}</svg>`;
+const yt=(labs)=>labs.map((l,j)=>[labs.length-1-j,l]);
+function hemi(ox,w,h,counts,cols,Tt){const Nn=Math.round(sum(counts));let s='';if(Nn>0){const rows=Math.max(2,Math.round(Math.sqrt(Nn/3.5))),radii=Array.from({length:rows},(_,i)=>.45+.55*i/(rows-1)),rs=sum(radii),per=radii.map(r=>Math.round(r/rs*Nn));per[rows-1]+=Nn-sum(per);let pts=[];radii.forEach((r,i)=>{const n=per[i];for(let k=0;k<n;k++)pts.push([n>1?Math.PI-Math.PI*k/(n-1):Math.PI/2,r])});pts.sort((a,b)=>b[0]-a[0]);
+let cc=[];counts.forEach((n,i)=>{for(let k=0;k<n;k++)cc.push(cols[i])});const S=Math.min(w/2.3,(h-110)/1.2),cx=w/2,by=h-90,rad=Math.max(2,Math.min(7,Math.sqrt(9000/Nn)/1.6));
+pts.forEach(([a,r],i)=>s+=`<circle cx="${cx+r*Math.cos(a)*S}" cy="${by-r*Math.sin(a)*S}" r="${rad}" fill="${cc[i]||'#ccc'}"/>`);s+=`<text x="${cx}" y="${by-4}" text-anchor="middle" font-size="16">${Nn}석</text>`}
+return `<g transform="translate(${ox},0)"><text x="${w/2}" y="22" text-anchor="middle" font-size="13" font-weight="bold">${Tt}</text>${s}</g>`}
+// ---------- 입력 테이블 / 앱 골격
+function RowTable(cols,rows){const el=document.createElement('div'),tb=document.createElement('table');
+tb.innerHTML='<tr>'+cols.map(c=>`<th>${c[0]}</th>`).join('')+'<th></th></tr>';el.append(tb);
+const add=v=>{v=v||cols.map(c=>c[2]=='str'?'새 항목':c[2]=='bool'?true:20);const tr=document.createElement('tr');
+cols.forEach((c,j)=>{const td=document.createElement('td');td.innerHTML=c[2]=='bool'?`<input type="checkbox" ${v[j]?'checked':''}>`:`<input type="text" size="${c[1]}" style="width:${c[1]*9+10}px" value="${v[j]}">`;tr.append(td)});
+const b=document.createElement('td');b.innerHTML='<button>×</button>';b.firstChild.onclick=()=>tr.remove();tr.append(b);tb.append(tr)};
+rows.forEach(add);const ab=document.createElement('button');ab.textContent='+ 행 추가';ab.onclick=()=>add();ab.style.margin='4px 0';el.append(ab);
+el.get=()=>[...tb.rows].slice(1).map(tr=>cols.map((c,j)=>{const i=tr.cells[j].firstChild,raw=c[2]=='bool'?i.checked:i.value;
+try{if(c[2]=='str')return raw.trim();if(c[2]=='bool')return raw;if(c[2]=='int'){const x=Number(String(raw).replace(/[,_]/g,''));if(String(raw).trim()===''||isNaN(x))throw 0;return Math.trunc(x)}const x=Number(raw);if(String(raw).trim()===''||isNaN(x))throw 0;return x}catch{throw Error(`'${c[0]}' 값이 올바르지 않습니다: '${raw}'`)}}));return el}
+function parseP(m){const P={};for(const[k,l,,c]of m.P){const raw=m.inp[k].value.trim(),bad=()=>{throw Error(`'${l}' 값이 올바르지 않습니다: '${raw}'`)};let v;
+if(c=='str')v=raw;else if(c=='seed'||c=='int'){if(c=='seed'&&raw==='')v=null;else if(/^[+-]?\d+$/.test(raw))v=+raw;else bad()}else{if(raw===''||isNaN(+raw))bad();v=+raw}P[k]=v}
+if(!['random','sequential'].includes(P.COUNT_ORDER))throw Error('개표 순서는 random 또는 sequential 이어야 합니다.');
+if(P.EXIT_POLL_INTERVAL<1||P.COUNT_STEP<1||P.SCALE<=0)throw Error('간격/배율 값은 양수여야 합니다.');return P}
+function build(m,idx){const A=document.createElement('div');A.className='app';A.innerHTML=`<div class="left"><div class="tabs"></div><div class="panes" style="flex:1;display:flex;flex-direction:column;min-height:0"></div><button class="go">▶ 선거 시작</button><progress max="1" value="0"></progress><div class="st">대기 중 (처음엔 '인구 배율'을 0.1로 해서 빠르게 시험해 보세요)</div></div><div class="right"><div class="tabs"></div><div class="panes" style="flex:1;display:flex;flex-direction:column;min-height:0"></div></div>`;
+$('#apps').append(A);const [L,Rt]=A.children,sw=(root,i)=>{[...$('.tabs',root).children].forEach((b,j)=>b.classList.toggle('on',i==j));[...$('.panes',root).children].forEach((p,j)=>p.classList.toggle('on',i==j))};
+const addTab=(root,name,pane)=>{const b=document.createElement('button');b.textContent=name;const tb=$('.tabs',root),ps=$('.panes',root);b.onclick=()=>sw(root,[...tb.children].indexOf(b));tb.append(b);pane.classList.add('pane');ps.append(pane);if(tb.children.length==1)sw(root,0)};
+const pp=document.createElement('div');pp.className='pt';m.inp={};m.P.forEach(([k,l,d])=>{const lb=document.createElement('label');lb.textContent=l;const i=document.createElement('input');i.type='text';i.value=d;m.inp[k]=i;pp.append(lb,i)});addTab(L,'변수',pp);
+m.tb=m.T.map(t=>{const p=document.createElement('div');p.innerHTML=`<div>${t.hint.replace(/\n/g,'<br>')}</div>`;const r=RowTable(t.cols,t.rows);p.append(r);addTab(L,t.tab,p);return r});
+m.panes={};m.TABS.forEach(([k,n])=>{const p=document.createElement('div');p.className='ch';p.innerHTML='<div class="svgw"></div>';if(k=='count'){p.insertAdjacentHTML('beforeend','<div class="bar"><button class="pl">▶ 재생</button><input type="range" min="0" max="0" value="0"><span class="sl" style="width:60px">-</span></div>');m.pl=$('.pl',p);m.sl=$('input',p);m.lb=$('.sl',p)}m.panes[k]=$('.svgw',p);addTab(Rt,n,p)});
+for(const n of['요약 텍스트','전체 텍스트']){const p=document.createElement('div');p.innerHTML='<pre></pre>';addTab(Rt,n,p);m['T'+n[0]]=$('pre',p)}
+m.A=A;m.bar=$('progress',A);m.st=$('.st',A);m.go=$('.go',A);m.R=null;m.job=null;
+const stop=()=>{if(m.job){clearTimeout(m.job);m.job=null}m.pl.textContent='▶ 재생'},draw=k=>{if(m.R)m.drawCount(+k);};
+m.sl.oninput=()=>draw(m.sl.value);
+const tickp=()=>{const k=+m.sl.value;if(k>=m.sl.max*1){stop();return}m.sl.value=k+1;draw(k+1);m.job=setTimeout(tickp,Math.max(Math.floor(m.R.P.COUNT_DELAY*1000),50))};
+m.pl.onclick=()=>{if(m.job){stop();return}if(!m.R)return;m.sl.value=0;draw(0);m.pl.textContent='■ 정지';m.job=setTimeout(tickp,10)};
+m.go.onclick=async()=>{let P,a,b;try{P=parseP(m);if(m.extra)m.extra(P);[a,b]=m.tb.map(t=>t.get());if(!a.length||!b.length)throw Error(m.empty);b.forEach(r=>{if(r[5]<1)throw Error(`${r[0]}: ${m.minmsg}`);r[4]=Math.max(Math.floor(r[4]*P.SCALE),r[5])})}catch(e){alert('입력 오류\n'+e.message);return}
+stop();m.go.disabled=true;m.bar.value=0;const pr=async(v,t)=>{m.bar.value=v;m.st.textContent=t;await tick()};
+try{m.R=await m.run(P,a,b,pr);m.st.textContent='완료';m.render(m.R)}catch(e){m.st.textContent='오류';alert('오류\n'+e.message);console.error(e)}m.go.disabled=false};
+m.setCount=last=>{m.sl.max=last;m.sl.value=last;m.drawCount(last)};m.A.dataset.i=idx}
+// =====================================================================
+//  1) 대통령 선거
+// =====================================================================
+const PP=[["SEED","난수 시드 (비우면 무작위)","","seed"],["SCALE","인구 배율 (작을수록 빠름)","1.0","f"],["VOTER_SD","유권자 이념 표준편차","10.0","f"],["DISTRICT_BIAS","투표구 편향 ±","4","int"],["EXTREME_WEIGHT","극단성 페널티","15.0","f"],["CONFLICT_RELIEF","갈등 완화 비율","0.5","f"],["TURNOUT_DECAY","투표율 감쇠","30.0","f"],["MIN_TURNOUT","최소 투표 확률","0.00","f"],["EXIT_POLL_INTERVAL","출구조사 간격(명당 1명)","10000","int"],["EXIT_POLL_SIMS","출구조사 시뮬 횟수","5000","int"],["CI_LOW","신뢰구간 하한(%)","2.5","f"],["CI_HIGH","신뢰구간 상한(%)","97.5","f"],["COUNT_STEP","개표 속보 간격(%)","10","int"],["COUNT_ORDER","개표 순서 (random/sequential)","random","str"],["COUNT_DELAY","재생 간격(초)","0.7","f"]];
+const REG1=[["서울",17,20,6,9274392,480],["부산",31,30,5,3226446,180],["대구",35,34,4,2345185,120],["인천",15,16,6,3070203,140],["광주",6,8,3,1382316,80],["대전",18,20,5,1443171,70],["울산",27,26,6,1085888,60],["세종",14,18,4,390618,20],["경기",16,18,6,13780735,600],["강원",28,26,4,1506690,80],["충청",22,22,5,3742660,190],["전라",10,9,3,3485763,200],["경상",31,29,5,5679098,290],["제주",16,17,5,662117,30]];
+const REG2=REG1.map((r,i)=>[...r.slice(0,5),[48,18,12,14,8,7,6,2,60,8,19,20,29,3][i]]);
+const regCols=(l)=>[["이름",7,"str"],["사회",4,"float"],["경제",4,"float"],["갈등",4,"float"],["인구",11,"int"],[l,6,"int"]];
+async function runPres(P,C,Rg,prog){rnd=mk(P.SEED);const n=C.length,names=C.map(c=>c[0]),CS=C.map(c=>c[1]),CE=C.map(c=>c[2]),RUN=C.map(c=>!!c[3]);
+if(!RUN.some(x=>x))throw Error('출마한 후보가 한 명도 없습니다.');const EXT=CS.map((s,i)=>Math.hypot(s-20,CE[i]-20)/Math.hypot(20,20)),nD=sum(Rg.map(r=>r[5])),iv=P.EXIT_POLL_INTERVAL,run=[...RUN.keys()].filter(i=>RUN[i]);
+const sim=(ls,le,V,cf)=>{const rs=1-P.CONFLICT_RELIEF*(cf/10),pen=EXT.map(x=>P.EXTREME_WEIGHT*x*rs),ch=new Int8Array(V);let m=0;
+for(let v=0;v<V;v++){const s=clip(ls+P.VOTER_SD*nrm(),0,40),e=clip(le+P.VOTER_SD*nrm(),0,40);let b=0,mn=Infinity;for(const j of run){const d=Math.hypot(s-CS[j],e-CE[j])+pen[j];if(d<mn){mn=d;b=j}}
+if(rnd()<clip(1-.9*mn/P.TURNOUT_DECAY,P.MIN_TURNOUT,1))ch[m++]=b}
+const c=ch.slice(0,m),ex=new Array(n).fill(0);for(let q=rint(0,iv);q<m;q+=iv)ex[c[q]]++;return[c,ex]};
+const ballots=[],dReg=[],dPop=[],dLab=[],exR=Rg.map(()=>new Array(n).fill(0));let done=0;
+for(let ri=0;ri<Rg.length;ri++){const[name,as,ae,cf,pop,ds]=Rg[ri],vpd=Math.max(Math.floor(pop/ds),1);
+for(let k=0;k<ds;k++){const bs=rint(-P.DISTRICT_BIAS,P.DISTRICT_BIAS+1),be=rint(-P.DISTRICT_BIAS,P.DISTRICT_BIAS+1),[ch,ex]=sim(clip(as+bs,0,40),clip(ae+be,0,40),vpd,cf);
+ballots.push(ch);dReg.push(ri);dPop.push(vpd);dLab.push(`${name} ${k+1}번 투표구`);ex.forEach((x,i)=>exR[ri][i]+=x);done++;if(done%25==0||done==nD)await prog(done/nD*.9,`투표 진행 중... ${name} (${done}/${nD})`)}}
+const full=ballots.map(b=>bc(b,n));await prog(.92,'출구조사 계산 중...');const K=P.EXIT_POLL_SIMS,sbr=exR.map(sum),tot=sum(sbr);if(tot==0)throw Error('출구조사 표본이 0명입니다. 출구조사 간격을 줄이세요.');
+const sims=Array.from({length:K},()=>new Array(n).fill(0));
+Rg.forEach((_,ri)=>{const w=sbr[ri]/tot;for(let k=0;k<K;k++){const d=dir(run.map(i=>exR[ri][i]+.5));run.forEach((i,t)=>sims[k][i]+=w*d[t])}});sims.forEach(r=>r.forEach((v,i)=>r[i]=v*100));
+const wp=bc(sims.map(am),n).map(c=>c/K*100),lo=new Array(n).fill(0),hi=[...lo],md=[...lo];run.forEach(i=>{const c=sims.map(r=>r[i]);lo[i]=pctl(c,P.CI_LOW);hi[i]=pctl(c,P.CI_HIGH);md[i]=med(c)});
+await prog(.96,'개표 타임라인 계산 중...');let order=[...Array(nD).keys()];if(P.COUNT_ORDER=='random')for(let i=nD-1;i>0;i--){const j=rint(0,i+1);[order[i],order[j]]=[order[j],order[i]]}
+const cf=order.map(i=>full[i]),cb=order.map(i=>ballots[i]),cp=order.map(i=>dPop[i]),cl=order.map(i=>dLab[i]),cumF=[new Array(n).fill(0)],cumP=[0];
+cf.forEach((r,i)=>{cumF.push(cumF[i].map((v,j)=>v+r[j]));cumP.push(cumP[i]+cp[i])});const tp=cumP[nD],step=Math.max(P.COUNT_STEP,1),pcts=[];for(let p=step;p<100;p+=step)pcts.push(p);pcts.push(100);
+const TS=[],TN=[],TT=[],TC=[],TL=[],TP=[];
+for(const pc of pcts){const tg=tp*pc/100;let nf=0;while(nf<nD&&cumP[nf+1]<=tg)nf++;const ta=cumF[nf].slice();let note='';
+if(nf<nD){const fr=(tg-cumP[nf])/cp[nf];if(fr>0){const k=Math.ceil(cb[nf].length*fr);bc(cb[nf].subarray(0,k),n).forEach((v,i)=>ta[i]+=v);note=` + ${cl[nf]} ${f(fr*100,0)}% 개표 중`}}
+const c=Math.max(sum(ta),1);TS.push(ta.map(v=>v/c*100));TN.push(nf);TT.push(ta);TC.push(c);TL.push(nf?cl[nf-1]:'-');TP.push(note)}
+await prog(1,'완료');return{P,names,running:RUN,cs:CS,ce:CE,extremity:EXT,n_cand:n,n_district:nD,full,district_region:dReg,exit_region:exR,share_sims:sims,win_prob:wp,poll_lo:lo,poll_hi:hi,poll_med:md,pcts,tl_tally:TT,tl_counted:TC,tl_last:TL,tl_partial:TP,tl_share:TS,tl_nfull:TN,regions:Rg,final:full.reduce((a,r)=>a.map((v,i)=>v+r[i]),new Array(n).fill(0))}}
+const regSum=(R,ri)=>R.full.reduce((a,r,d)=>R.district_region[d]==ri?a.map((v,i)=>v+r[i]):a,new Array(R.n_cand).fill(0));
+function fullPres(R){const P=R.P,nm=R.names,RUN=R.running,L=[],out=s=>L.push(s),idx=[...RUN.keys()].filter(i=>RUN[i]),exN=sum(R.exit_region.map(sum));
+out(rep('=',74));out(`[출구조사] 투표자 ${P.EXIT_POLL_INTERVAL}명당 1명 표본, 표본 총 ${N(exN)}명`);out(rep('=',74));out(pad('후보',16)+pad('예상 득표율(중앙값)',28)+'당선 가능성');
+idx.forEach(i=>out(pad(nm[i],16)+pad(`${f(R.poll_lo[i])}~${f(R.poll_hi[i])}% (${f(R.poll_med[i])}%)`,28)+f(R.win_prob[i],1)+'%'));out(`\n※ ${f(P.CI_HIGH-P.CI_LOW,0)}% 신뢰구간 / 지역별 표본을 투표자 수 비중으로 가중`);
+out('\n'+rep('=',74));out(`[개표 속보] ${P.COUNT_ORDER=='random'?'투표구를 무작위 순서로':'첫 투표구부터 순서대로'}, 전체 인구의 ${P.COUNT_STEP}%씩 개표`);out(rep('=',74));let prev=null;
+R.pcts.forEach((pc,k)=>{const ta=R.tl_tally[k],sh=R.tl_share[k],rk=asort(ta).filter(i=>RUN[i]),ld=rk[0];
+const gap=rk.length>1?`2위 ${nm[rk[1]]}와 ${N(ta[ld]-ta[rk[1]])}표 (${f(sh[ld]-sh[rk[1]])}%p) 차`:'단독 출마';
+out(`\n--- ${pc>=100?'개표 완료':'개표율 '+pc+'%'} | 집계 투표자 ${N(R.tl_counted[k])}명 | 개표 완료 ${R.tl_nfull[k]}/${R.n_district}곳 (최근 완료: ${R.tl_last[k]})${R.tl_partial[k]} ---`);out(pad('후보',16)+pad('득표',14)+'득표율(변화)');
+rk.forEach(i=>{let d='';if(prev){const x=sh[i]-prev[i];d=` (${x>.005?'▲':x<-.005?'▼':'-'}${f(Math.abs(x))})`}out(pad(nm[i],16)+pad(N(ta[i]),14)+f(sh[i])+'%'+d)});out(`선두: ${nm[ld]} | ${gap}`);prev=sh});
+const fi=R.final,tc=sum(fi),tpop=sum(R.regions.map(r=>r[4])),w=am(fi),wr=fi[w]/tc*100;out('\n'+rep('=',74));out('🗳️ 대통령 선거 결과');out(rep('=',74));out(`총 유권자 수: ${N(tpop)}`);out(`총 투표자 수: ${N(tc)} (투표율 ${f(tc/tpop*100)}%)`);
+out(`당선인: ${nm[w]} (${N(fi[w])}표, ${f(wr)}%)`+(wr>50?'':'  ※ 과반 미달 (단순 다수 당선)'));out('\n[후보별 득표율]');
+asort(fi).forEach(i=>{if(!RUN[i])return;const r=fi[i]/tc*100,lo=R.poll_lo[i],hi=R.poll_hi[i];out(`${pad(nm[i],16)} | ${lj(rep('█',Math.floor(r/2)),50)} ${N(fi[i])}표 (${f(r)}%)`);out(`${pad('',16)}   (사회 ${g(R.cs[i])}, 경제 ${g(R.ce[i])}, 극단성 ${f(R.extremity[i])} | 출구조사 ${f(lo)}~${f(hi)}% [${lo<=r&&r<=hi?'적중':'벗어남'}])`)});
+out('\n[지역별 투표 결과 및 투표율]');R.regions.forEach(([name,,,cf,pop],ri)=>{const c=regSum(R,ri),cast=sum(c);out(`\n${name} (갈등 ${g(cf)}) - 유권자: ${N(pop)}, 투표자: ${N(cast)} (투표율: ${f(cast/pop*100)}%) | 1위: ${nm[am(c)]}`);asort(c).forEach(i=>{if(RUN[i])out(`  ${pad(nm[i],16)}${rj(N(c[i]),10)}표 (${f(c[i]/Math.max(cast,1)*100)}%)`)})});return L.join('\n')}
+function sumPres(R){const nm=R.names,idx=asort(R.final).filter(i=>R.running[i]),tc=sum(R.final),pop=sum(R.regions.map(r=>r[4])),w=idx[0],rt=R.final[w]/tc*100;
+const L=['=== 대통령 선거 결과 ===',`총 유권자 수: ${N(pop)}`,`총 투표자 수: ${N(tc)} (투표율 ${f(tc/pop*100)}%)`,`당선인: ${nm[w]} (${N(R.final[w])}표, ${f(rt)}%)`+(rt>50?'':'  ※ 과반 미달 (단순 다수 당선)'),'','[후보별 득표 / 출구조사]'];
+idx.forEach(i=>{const r=R.final[i]/tc*100;L.push(`${lj(nm[i],12)} ${rj(N(R.final[i]),12)}표 (${rj(f(r),6)}%) | 출구 ${f(R.poll_lo[i])}~${f(R.poll_hi[i])}% [${R.poll_lo[i]<=r&&r<=R.poll_hi[i]?'적중':'벗어남'}] 당선가능성 ${f(R.win_prob[i],1)}%`)});
+L.push('','[지역별]');R.regions.forEach((rg,ri)=>{const c=regSum(R,ri);L.push(`${rg[0]} (갈등 ${g(rg[3])}) 투표율 ${f(sum(c)/rg[4]*100)}% | 1위 ${nm[am(c)]}`)});return L.join('\n')}
+const W9=900,H9=520;
+function renderPres(R){const m=M[0],idx=asort(R.final).filter(i=>R.running[i]),nI=idx.length,tc=sum(R.final),nm=R.names,C=COL,ypos=idx.map((_,j)=>nI-1-j),mx=m;m.idx=idx;
+{const rates=idx.map(i=>R.final[i]/tc*100),lo=idx.map(i=>R.poll_lo[i]),hi=idx.map(i=>R.poll_hi[i]),pop=sum(R.regions.map(r=>r[4])),
+c=G({w:W9,h:H9,l:140,x0:0,x1:Math.max(Math.max(...rates),Math.max(...hi))*1.3,y0:-.6,y1:nI-.4,title:`최종 득표율 — 당선: ${nm[idx[0]]}  |  투표율 ${f(tc/pop*100)}%`,xl:'득표율 (%)',yt:yt(idx.map(i=>nm[i]))});
+idx.forEach((i,j)=>{const y=ypos[j];c.rect(0,rates[j],y-.4,y+.4,C[i%10],.85);const mid=(lo[j]+hi[j])/2;c.line(lo[j],y,hi[j],y,'#000',1.5);[lo[j],hi[j]].forEach(v=>c.line(v,y-.12,v,y+.12));c.t(rates[j],y+.28,`${N(R.final[i])}표 (${f(rates[j])}%)`,4,-3)});
+c.line(50,-.6,50,nI-.4,'gray',1,'2 3');c.leg([['#000','출구조사 신뢰구간']],'br');m.panes.final.innerHTML=SV(W9,H9,c)}
+{let xs=[],mxc=0;idx.forEach(i=>xs.push(...R.share_sims.map(r=>r[i])));const x0=Math.min(...xs),x1=Math.max(...xs),H=idx.map(i=>{const v=R.share_sims.map(r=>r[i]),a=Math.min(...v),b=Math.max(...v),w=(b-a)/40||1,h=new Array(40).fill(0);v.forEach(x=>h[Math.min(39,Math.floor((x-a)/w))]++);mxc=Math.max(mxc,...h);return[a,w,h]});
+const c=G({w:W9,h:H9,x0,x1:x1+(x1-x0)*.02,y0:0,y1:mxc*1.05,title:`출구조사 득표율 분포 (표본 ${N(sum(R.exit_region.map(sum)))}명)`,xl:'득표율 (%)   [점선 = 실제 개표 결과]',yl:'시뮬레이션 빈도'});
+idx.forEach((i,j)=>{const[a,w,h]=H[j];h.forEach((v,k)=>c.rect(a+k*w,a+(k+1)*w,0,v,C[i%10],.55));const r=R.final[i]/tc*100;c.line(r,0,r,mxc*1.05,C[i%10],1.5,'5 4')});
+c.leg(idx.map(i=>[C[i%10],`${nm[i]} (당선 가능성 ${f(R.win_prob[i],1)}%)`]),'tr');m.panes.exit.innerHTML=SV(W9,H9,c)}
+{const labs=[],mat=R.regions.map((rg,ri)=>{const c=regSum(R,ri),cast=Math.max(sum(c),1);labs.push(`${rg[0]} (갈등 ${g(rg[3])})\n투표율 ${f(cast/rg[4]*100,1)}%`);return idx.map(i=>c[i]/cast*100)}),nR=labs.length,
+c=G({w:W9,h:H9+60,l:120,b:60,x0:0,x1:100,y0:-.6,y1:nR-.4,title:'지역별 투표 결과',xl:'지역 내 득표율 (%)',yt:yt(labs)});
+mat.forEach((row,ri)=>{let l=0;const y=nR-1-ri;row.forEach((v,k)=>{c.rect(l,l+v,y-.4,y+.4,C[idx[k]%10]);if(v>=5)c.t(l+v/2,y,f(v,0),0,0,'fill="#fff" text-anchor="middle"');l+=v})});c.leg(idx.map(i=>[C[i%10],nm[i]]),'below');m.panes.region.innerHTML=SV(W9,H9+60,c)}
+{const c=G({w:W9,h:H9,x0:-2,x1:42,y0:-2,y1:42,title:'이념 지도  (원 = 후보, 크기 ∝ 득표 / ■ = 지역 평균)',xl:'사회성향 (0 진보 ↔ 40 보수)',yl:'경제성향 (0 분배 ↔ 40 시장)'});
+nm.forEach((n,i)=>{const run=R.running[i],s=120+(run?R.final[i]/tc*2500:0);c.dot(R.cs[i],R.ce[i],Math.sqrt(s/Math.PI)*1.15,run?C[i%10]:'none',C[i%10],.8);c.t(R.cs[i],R.ce[i],n+(run?'':' (불출마)'),8,-8)});
+R.regions.forEach(rg=>{c.sq(rg[1],rg[2]);c.t(rg[1],rg[2],rg[0],6,12,'font-size="10"')});c.line(-2,20,42,20,'gray',.6);c.line(20,-2,20,42,'gray',.6);m.panes.map.innerHTML=SV(W9,H9,c)}
+m.setCount(R.pcts.length-1);m.T요.textContent=sumPres(R);m.T전.textContent=fullPres(R)}
+function drawCountPres(k){const R=M[0].R,idx=M[0].idx,nm=R.names,C=COL,sh=R.tl_share[k],nI=idx.length,all=R.tl_share.flatMap(r=>idx.map(i=>r[i])),top=Math.max(...all),bot=Math.min(...all),
+a=G({w:380,h:H9,l:100,x0:0,x1:top*1.25,y0:-.6,y1:nI-.4,title:`개표율 ${R.pcts[k]}%  (${R.tl_nfull[k]}/${R.n_district}곳)`,yt:yt(idx.map(i=>nm[i]))}),
+b=G({ox:390,w:510,h:H9,x0:0,x1:100,y0:Math.max(bot-3,0),y1:top+3,title:'개표 진행에 따른 득표율 변화 (점선 = 최종)',xl:'개표율 (%)',yl:'누적 득표율 (%)',t:34});
+idx.forEach((i,j)=>{const y=nI-1-j;a.rect(0,sh[i],y-.4,y+.4,C[i%10]);a.t(sh[i],y,f(sh[i])+'%',4);b.poly(R.pcts.slice(0,k+1),R.tl_share.slice(0,k+1).map(r=>r[i]),C[i%10],1);b.line(0,R.tl_share.at(-1)[i],100,R.tl_share.at(-1)[i],C[i%10],.8,'2 3')});
+b.leg(idx.map(i=>[C[i%10],nm[i]]),'tr');M[0].panes.count.innerHTML=SV(900,H9,a,b);M[0].lb.textContent=R.pcts[k]+'%'}
+// =====================================================================
+//  2) 총선
+// =====================================================================
+const PL=[["SEED","난수 시드 (비우면 무작위)","","seed"],["SCALE","인구 배율 (작을수록 빠름)","1.0","f"],["PR_SEATS","비례대표 의석 수","46","int"],["PR_THRESHOLD","비례 봉쇄조항(득표율)","0.03","f"],["PR_MIN_DISTRICT_SEATS","봉쇄 예외 지역구 의석","5","int"],["VOTER_SD","유권자 이념 표준편차","10.0","f"],["DISTRICT_BIAS","지역구 편향 ±","4","int"],["EXTREME_WEIGHT","극단성 페널티","15.0","f"],["CONFLICT_RELIEF","갈등 완화 비율","0.5","f"],["TURNOUT_DECAY","투표율 감쇠","30.0","f"],["MIN_TURNOUT","최소 투표 확률","0.10","f"],["CANDIDATE_SD","후보 개인 효과 SD","3.0","f"],["STRATEGIC_RATE","전략투표 비율","0.30","f"],["VIABLE_TOP_N","당선권 후보 수","2","int"],["EXIT_POLL_INTERVAL","출구조사 간격(명당 1명)","1000","int"],["EXIT_POLL_SIMS","출구조사 시뮬 횟수","3000","int"],["CI_LOW","신뢰구간 하한(%)","2.5","f"],["CI_HIGH","신뢰구간 상한(%)","97.5","f"],["COUNT_STEP","개표 속보 간격(%)","10","int"],["COUNT_ORDER","개표 순서 (random/sequential)","random","str"],["COUNT_DELAY","재생 간격(초)","0.7","f"]];
+const PARTY=[["공산당",8,1,.5,true],["사민당",12,14,1,true],["국민당",22,26,1,true],["힘의망치",30,30,1,true],["지혜의모루",28,36,.6,true],["국가사회당",38,15,0,true]];
+async function runLeg(P,Pt,Rg,prog){rnd=mk(P.SEED);const nP=Pt.length,names=Pt.map(p=>p[0]),PS=Pt.map(p=>p[1]),PE=Pt.map(p=>p[2]),DR=Pt.map(p=>clip(+p[3],0,1)),PRR=Pt.map(p=>!!p[4]),EXT=PS.map((s,i)=>Math.hypot(s-20,PE[i]-20)/Math.hypot(20,20)),nD=sum(Rg.map(r=>r[5])),PRS=P.PR_SEATS,iv=P.EXIT_POLL_INTERVAL,notes=[],prI=[...PRR.keys()].filter(i=>PRR[i]);
+const alloc=(votes,ds)=>{const v0=votes.map((v,i)=>PRR[i]?v:0),seats=new Array(nP).fill(0),tot=sum(v0);if(tot<=0||PRS==0)return seats;const valid=v0.map((v,i)=>PRR[i]&&v>0&&(v/tot>=P.PR_THRESHOLD||ds[i]>=P.PR_MIN_DISTRICT_SEATS));if(!valid.some(x=>x))return seats;
+const v=v0.map((x,i)=>valid[i]?x:0),s=sum(v),ex=v.map(x=>x/s*PRS);ex.forEach((e,i)=>seats[i]=Math.floor(e));const rem=PRS-sum(seats);asort(ex.map((e,i)=>e-seats[i])).slice(0,rem).forEach(i=>seats[i]++);return seats};
+const runs=Array.from({length:nD},()=>new Array(nP).fill(false));for(let p=0;p<nP;p++){const k=Math.round(DR[p]*nD);if(k>0){const a=[...Array(nD).keys()];for(let i=0;i<k;i++){const j=rint(i,nD);[a[i],a[j]]=[a[j],a[i]];runs[a[i]][p]=true}}}
+const el=[...DR.keys()].filter(i=>DR[i]>0);if(!el.length)throw Error('지역구에 출마하는 정당이 하나도 없습니다. 지역구 출마 비율을 확인하세요.');const empty=[...runs.keys()].filter(d=>!runs[d].some(x=>x));empty.forEach(d=>runs[d][el[rint(0,el.length)]]=true);
+if(empty.length)notes.push(`※ 후보가 없던 지역구 ${empty.length}곳은 출마 가능 정당 중 하나가 무작위로 출마했습니다.`);
+const sim=(ls,le,V,cf,rd)=>{const rs=1-P.CONFLICT_RELIEF*(cf/10),pen=EXT.map(x=>P.EXTREME_WEIGHT*x*rs),ob=rd.map((r,i)=>r||PRR[i]),E=[],nr=rd.filter(x=>x).length;
+for(let v=0;v<V;v++){const s=clip(ls+P.VOTER_SD*nrm(),0,40),e=clip(le+P.VOTER_SD*nrm(),0,40),ef=new Float64Array(nP);let mn=Infinity;for(let j=0;j<nP;j++){ef[j]=Math.hypot(s-PS[j],e-PE[j])+pen[j];if(ob[j]&&ef[j]<mn)mn=ef[j]}if(rnd()<clip(1-.9*mn/P.TURNOUT_DECAY,P.MIN_TURNOUT,1))E.push(ef)}
+const nv=E.length,pc=new Int8Array(nv),dc=new Int8Array(nv),ed=E.map(ef=>{const x=new Float64Array(nP);for(let j=0;j<nP;j++)x[j]=rd[j]?ef[j]:Infinity;return x});
+const ce=Array.from({length:nP},()=>P.CANDIDATE_SD*nrm());
+for(let v=0;v<nv;v++){let b=0,mn=Infinity;if(prI.length)for(const j of prI)if(E[v][j]<mn){mn=E[v][j];b=j}pc[v]=b;b=0;mn=Infinity;for(let j=0;j<nP;j++){if(!rd[j])continue;const d=E[v][j]+ce[j];ed[v][j]=d;if(d<mn){mn=d;b=j}}dc[v]=b}
+if(P.STRATEGIC_RATE>0&&nr>P.VIABLE_TOP_N){const via=asort(bc(dc,nP)).slice(0,P.VIABLE_TOP_N);for(let v=0;v<nv;v++){if(via.includes(dc[v])||rnd()>=P.STRATEGIC_RATE)continue;let b=0,mn=Infinity;for(const j of via)if(ed[v][j]<mn){mn=ed[v][j];b=j}dc[v]=b}}
+const xd=new Array(nP).fill(0),xp=new Array(nP).fill(0);for(let q=0;q<nv;q+=iv){xd[dc[q]]++;xp[pc[q]]++}return[dc,pc,xd,xp]};
+const dR=[],bD=[],bP=[],xD=[],xP=[],dPop=[],dLab=[],rb=new Array(Rg.length).fill(0);let di=0;
+for(let ri=0;ri<Rg.length;ri++){const[name,as,ae,cf,pop,ds]=Rg[ri],vps=Math.max(Math.floor(pop/ds),1);for(let k=0;k<ds;k++){const bs=rint(-P.DISTRICT_BIAS,P.DISTRICT_BIAS+1),be=rint(-P.DISTRICT_BIAS,P.DISTRICT_BIAS+1),[a,b,c,d]=sim(clip(as+bs,0,40),clip(ae+be,0,40),vps,cf,runs[di]);
+dR.push(ri);bD.push(a);bP.push(b);dPop.push(vps);xD.push(c);xP.push(d);dLab.push(`${name} ${k+1}번`);rb[ri]+=a.length;di++;if(di%5==0||di==nD)await prog(di/nD*.85,`투표 진행 중... ${name} (${di}/${nD})`)}}
+const fD=bD.map(b=>bc(b,nP)),fP=bP.map(b=>bc(b,nP));await prog(.88,'출구조사 계산 중...');const K=P.EXIT_POLL_SIMS,sr=Array.from({length:K},()=>new Array(nP).fill(0)),wp=[];
+for(let d=0;d<nD;d++){const idx=[...runs[d].keys()].filter(i=>runs[d][i]),w=new Array(nP).fill(0);for(let k=0;k<K;k++){const dr=dir(idx.map(i=>xD[d][i]+.5)),j=idx[am(dr)];sr[k][j]++;w[j]++}wp.push(w.map(x=>x/K))}
+const xps=xP.reduce((a,r)=>a.map((v,i)=>v+r[i]),new Array(nP).fill(0));let sp=Array.from({length:K},()=>new Array(nP).fill(0));
+if(prI.length&&PRS>0){sp=[];for(let k=0;k<K;k++){const dr=dir(prI.map(i=>xps[i]+.5)),fv=new Array(nP).fill(0);prI.forEach((i,t)=>fv[i]=dr[t]);sp.push(alloc(fv,sr[k]))}}
+const st=sr.map((r,k)=>r.map((v,i)=>v+sp[k][i])),rr=a=>[Math.floor(pctl(a,P.CI_LOW)),Math.ceil(pctl(a,P.CI_HIGH))],col=(m,i)=>m.map(r=>r[i]),I=[...Array(nP).keys()];
+const pR=I.map(i=>rr(col(sr,i))),pPR=I.map(i=>rr(col(sp,i))),pT=I.map(i=>rr(col(st,i))),pM=I.map(i=>Math.floor(med(col(st,i)))),close=wp.filter(w=>Math.max(...w)<.9).length;
+await prog(.94,'개표 타임라인 계산 중...');let ord=[...Array(nD).keys()];if(P.COUNT_ORDER=='random')for(let i=nD-1;i>0;i--){const j=rint(0,i+1);[ord[i],ord[j]]=[ord[j],ord[i]]}
+const cD=ord.map(i=>fD[i]),cbd=ord.map(i=>bD[i]),cbp=ord.map(i=>bP[i]),cp=ord.map(i=>dPop[i]),cl=ord.map(i=>dLab[i]),cumD=[new Array(nP).fill(0)],cumP=[new Array(nP).fill(0)],cpop=[0];
+ord.forEach((o,i)=>{cumD.push(cumD[i].map((v,j)=>v+fD[o][j]));cumP.push(cumP[i].map((v,j)=>v+fP[o][j]));cpop.push(cpop[i]+cp[i])});
+const tp=cpop[nD],step=Math.max(P.COUNT_STEP,1),pcts=[];for(let p=step;p<100;p+=step)pcts.push(p);pcts.push(100);const TL=[];
+for(const pc of pcts){const tg=tp*pc/100;let nf=0;while(nf<nD&&cpop[nf+1]<=tg)nf++;const nd=cumD[nf].slice(),np=cumP[nf].slice(),ld=cD.slice(0,nf).map(am);let note='';
+if(nf<nD){const fr=(tg-cpop[nf])/cp[nf];if(fr>0){const k=Math.ceil(cbd[nf].length*fr),pd=bc(cbd[nf].subarray(0,k),nP),pp=bc(cbp[nf].subarray(0,k),nP);pd.forEach((v,i)=>{nd[i]+=v;np[i]+=pp[i]});ld.push(am(pd));note=` + ${cl[nf]} ${f(fr*100,0)}% 개표 중`}}
+const sg=bc(ld,nP),spr=alloc(np,sg),td=Math.max(sum(nd),1),tpp=Math.max(sum(np),1);TL.push({pct:pc,n_full:nf,last:nf?cl[nf-1]:'-',note,nat_d:nd,td,share_d:nd.map(v=>v/td*100),share_p:np.map(v=>v/tpp*100),seats_reg:sg,seats_pr:spr})}
+const vD=fD.reduce((a,r)=>a.map((v,i)=>v+r[i]),new Array(nP).fill(0)),vP=fP.reduce((a,r)=>a.map((v,i)=>v+r[i]),new Array(nP).fill(0)),fr=bc(fD.map(am),nP),fpr=alloc(vP,fr);await prog(1,'완료');
+return{P,names,parties:Pt,regions:Rg,n_party:nP,n_district:nD,P_S:PS,P_E:PE,PR_RUN:PRR,EXTREMITY:EXT,runs,notes,full_d:fD,full_p:fP,district_region:dR,region_ballots:rb,exit_total:sum(xD.map(sum)),poll_reg:pR,poll_pr:pPR,poll_tot:pT,poll_med:pM,close,TL,votes_d:vD,votes_p:vP,final_reg:fr,final_pr:fpr,final_total:fr.map((v,i)=>v+fpr[i]),total_seats:nD+(PRR.some(x=>x)?PRS:0),PR_SEATS:PRS}}
+const winsR=(R,ri)=>{const w=new Array(R.n_party).fill(0),vd=[...w],vp=[...w];R.full_d.forEach((r,d)=>{if(R.district_region[d]!=ri)return;w[am(r)]++;r.forEach((v,i)=>{vd[i]+=v;vp[i]+=R.full_p[d][i]})});return[w,vd,vp]};
+function fullLeg(R){const P=R.P,nm=R.names,nP=R.n_party,L=[...R.notes],out=s=>L.push(s);out(rep('=',74));out(`[출구조사] 투표자 ${P.EXIT_POLL_INTERVAL}명당 1명 표본, 표본 총 ${N(R.exit_total)}명 (지역구표·정당표 동시 조사)`);out(rep('=',74));out(pad('정당',12)+pad('지역구',14)+pad('비례',12)+'총 의석(중앙값)');
+for(let i=0;i<nP;i++){const a=R.poll_reg[i],b=R.poll_pr[i],c=R.poll_tot[i];out(pad(nm[i],12)+pad(`${a[0]}~${a[1]}`,14)+pad(`${b[0]}~${b[1]}`,12)+`${c[0]}~${c[1]}석 (${R.poll_med[i]})`)}
+out(`\n※ ${f(P.CI_HIGH-P.CI_LOW,0)}% 신뢰구간 / 1위 당선확률 90% 미만 경합 지역구: ${R.close}곳`);out('\n'+rep('=',74));out(`[개표 속보] ${P.COUNT_ORDER=='random'?'지역구를 무작위 순서로':'첫 지역구부터 순서대로'}, 전체 인구의 ${P.COUNT_STEP}%씩 개표`);out(rep('=',74));let prev=null;
+R.TL.forEach(t=>{out(`\n--- ${t.pct>=100?'개표 완료':'개표율 '+t.pct+'%'} | 집계 투표자 ${N(t.td)}명 | 개표 완료 ${t.n_full}/${R.n_district}곳 (최근 완료: ${t.last})${t.note} ---`);out(pad('정당',12)+pad('지역구표',10)+pad('정당표(변화)',18)+pad('지역구(당선/선두)',18)+pad('비례(예상)',12)+'합계');
+for(let i=0;i<nP;i++){let d='';if(prev){const x=t.share_p[i]-prev[i];d=` (${x>.005?'▲':x<-.005?'▼':'-'}${f(Math.abs(x))})`}out(pad(nm[i],12)+pad(f(t.share_d[i])+'%',10)+pad(f(t.share_p[i])+'%'+d,18)+pad(String(t.seats_reg[i]),18)+pad(String(t.seats_pr[i]),12)+(t.seats_reg[i]+t.seats_pr[i]))}prev=t.share_p});
+out('\n'+rep('=',74));out('[최종 의석 결과 요약]');out(rep('=',74));const nd=R.n_district,PRS=R.PR_SEATS,ts=R.total_seats,td=Math.max(sum(R.votes_d),1),tpp=Math.max(sum(R.votes_p),1);
+for(let i=0;i<nP;i++){const rg=R.final_reg[i],pr=R.final_pr[i],tot=R.final_total[i],rr=rg/nd*100,pq=PRS?pr/PRS*100:0,tr=tot/ts*100,[lo,hi]=R.poll_tot[i];
+out(`\n${nm[i]}  (사회 ${g(R.parties[i][1])}, 경제 ${g(R.parties[i][2])}, 극단성 ${f(R.EXTREMITY[i])} | 지역구 ${R.runs.filter(r=>r[i]).length}곳 출마, 비례 ${R.PR_RUN[i]?'참여':'불참'})`);
+out(`총 의석   | ${lj(rep('█',Math.floor(tr/2)),50)} ${tot}석 (${f(tr)}%)`);out(`지역구    | ${lj(rep('▒',Math.floor(rr/2)),50)} ${rg}석 (${f(rr)}%)`);out(`비례대표  | ${lj(rep('░',Math.floor(pq/2)),50)} ${pr}석 (${f(pq)}%)`);
+out(`지역구표  | ${N(R.votes_d[i])}표 (${f(R.votes_d[i]/td*100)}%)`);out(`정당표    | ${N(R.votes_p[i])}표 (${f(R.votes_p[i]/tpp*100)}%)`);out(`출구조사  | 예상 ${lo}~${hi}석 -> 실제 ${tot}석 [${lo<=tot&&tot<=hi?'적중':'벗어남'}]`)}
+out('\n[지역별 투표율]');R.regions.forEach(([name,,,cf,pop],ri)=>{const c=R.region_ballots[ri];out(`${pad(name,6)} 갈등 ${rj(g(cf),2)} | 투표자 ${rj(N(c),10)} / 인구 ${rj(N(pop),10)} | 투표율 ${f(c/pop*100)}%`)});
+out('\n[지역별 결과: 지역구 당선 / 지역구표 / 정당표]');R.regions.forEach((rg,ri)=>{const[w,vd,vp]=winsR(R,ri);out('\n'+rg[0]);for(let i=0;i<nP;i++)out(`  ${pad(nm[i],12)}${rj(w[i],3)}석   지역구표 ${rj(N(vd[i]),9)}   정당표 ${rj(N(vp[i]),9)}`)});return L.join('\n')}
+function sumLeg(R){const nm=R.names,o=asort(R.final_total),ts=R.total_seats,top=o[0],L=['=== 총선 결과 요약 ===',`총 의석 ${ts} (지역구 ${R.n_district} + 비례 ${R.PR_SEATS}), 과반 ${Math.floor(ts/2)+1}석`,`제1당: ${nm[top]} ${R.final_total[top]}석`+(R.final_total[top]>ts/2?'  (단독 과반)':'  (과반 미달)'),'',lj('정당',10)+rj('지역구',6)+rj('비례',6)+rj('합계',6)+'   출구조사 예상'];
+o.forEach(i=>{const[lo,hi]=R.poll_tot[i],t=R.final_total[i];L.push(lj(nm[i],10)+rj(R.final_reg[i],6)+rj(R.final_pr[i],6)+rj(t,6)+`   ${lo}~${hi}석 [${lo<=t&&t<=hi?'적중':'벗어남'}]`)});return L.join('\n')}
+function stack(a,sr,sp,order,xmax,cols){const n=order.length;order.forEach((i,j)=>{const y=n-1-j;a.rect(0,sr[i],y-.4,y+.4,cols[i%10]);a.rect(sr[i],sr[i]+sp[i],y-.4,y+.4,cols[i%10],.45);a.t(sr[i]+sp[i],y,`${sr[i]+sp[i]}석 (${sr[i]}+${sp[i]})`,5)});a.leg([['#888','지역구'],['#ccc','비례']],'br')}
+function renderLeg(R){const m=M[1],nP=R.n_party,nm=R.names,C=COL,I=[...Array(nP).keys()];
+{const o=asort(R.final_total),a=G({w:540,h:H9,l:90,x0:0,x1:Math.max(...R.final_total)*1.35+1,y0:-.6,y1:nP-.4,title:'정당별 의석',xl:`의석 (점선 = 과반 ${Math.floor(R.total_seats/2)+1}석)`,yt:yt(o.map(i=>nm[i]))});stack(a,R.final_reg,R.final_pr,o,0,C);a.line(R.total_seats/2,-.6,R.total_seats/2,nP-.4,'gray',1,'2 3');
+const l2r=I.slice().sort((x,y)=>R.P_S[x]-R.P_S[y]),h=hemi(560,340,H9,l2r.map(i=>R.final_total[i]),l2r.map(i=>C[i%10]),'의회 배치 (왼쪽=진보 → 오른쪽=보수)'),lg=l2r.map((i,k)=>`<rect x="${565+(k%3)*115}" y="${H9-60+Math.floor(k/3)*18}" width="10" height="10" fill="${C[i%10]}"/><text x="${580+(k%3)*115}" y="${H9-51+Math.floor(k/3)*18}" font-size="11">${esc(nm[i])}</text>`).join('');m.panes.seats.innerHTML=SV(900,H9,a,h,lg)}
+{const vd=R.votes_d.map(v=>v/Math.max(sum(R.votes_d),1)*100),vp=R.votes_p.map(v=>v/Math.max(sum(R.votes_p),1)*100),c=G({w:W9,h:H9,x0:-.6,x1:nP-.4,y0:0,y1:Math.max(...vd,...vp)*1.1,title:'지역구표 vs 정당표 (분할투표 효과)',yl:'득표율 (%)',xt:I.map(i=>[i,nm[i]])});
+I.forEach(i=>{c.rect(i-.4,i,0,vd[i],C[i%10]);c.rect(i,i+.4,0,vp[i],C[i%10],.5);c.t(i-.2,vd[i],f(vd[i],1),0,-8,'text-anchor="middle"');c.t(i+.2,vp[i],f(vp[i],1),0,-8,'text-anchor="middle"')});c.leg([['#888','지역구표'],['#ccc','정당표']],'tr');m.panes.votes.innerHTML=SV(W9,H9,c)}
+{const c=G({w:W9,h:H9,l:110,x0:0,x1:Math.max(...R.poll_tot.map(r=>r[1]))*1.15+2,y0:-.6,y1:nP-.4,title:`출구조사 예상 의석 범위 (표본 ${N(R.exit_total)}명, 경합 지역구 ${R.close}곳)`,xl:'총 의석',yt:yt(nm)});
+I.forEach(i=>{const y=nP-1-i,[lo,hi]=R.poll_tot[i];c.rect(lo,hi,y-.12,y+.12,C[i%10],.6);c.line(R.poll_med[i],y-.25,R.poll_med[i],y+.25,'#000',2);c.t(R.final_total[i],y,'★',-7,5,'fill="red" font-size="20"');c.t(hi,y,`${lo}~${hi}석`,6)});c.leg([['#000','중앙값'],['red','실제 결과']],'br');m.panes.exit.innerHTML=SV(W9,H9,c)}
+{const labs=[],mat=R.regions.map((rg,ri)=>{labs.push(`${rg[0]} (갈등 ${g(rg[3])})\n투표율 ${f(R.region_ballots[ri]/rg[4]*100,1)}%`);return winsR(R,ri)[0]}),mx=Math.max(...mat.map(sum)),nR=labs.length,c=G({w:W9,h:H9+60,l:120,b:60,x0:0,x1:mx*1.05,y0:-.6,y1:nR-.4,title:'지역별 지역구 당선',xl:'지역구 당선 수',yt:yt(labs)});
+mat.forEach((row,ri)=>{let l=0;const y=nR-1-ri;row.forEach((v,i)=>{c.rect(l,l+v,y-.4,y+.4,C[i%10]);if(v>=Math.max(3,.05*mx))c.t(l+v/2,y,v,0,0,'fill="#fff" text-anchor="middle"');l+=v})});c.leg(I.map(i=>[C[i%10],nm[i]]),'below');m.panes.region.innerHTML=SV(W9,H9+60,c)}
+{const c=G({w:W9,h:H9,x0:-2,x1:42,y0:-2,y1:42,title:'이념 지도 (원 크기 ∝ 의석, 속이 빈 원 = 지역구 불참 / ■ = 지역 평균)',xl:'사회성향 (0 진보 ↔ 40 보수)',yl:'경제성향 (0 분배 ↔ 40 시장)'});
+I.forEach(i=>{const has=R.runs.some(r=>r[i]);c.dot(R.P_S[i],R.P_E[i],Math.sqrt((120+R.final_total[i]*12)/Math.PI)*1.15,has?C[i%10]:'none',C[i%10],.8);c.t(R.P_S[i],R.P_E[i],`${nm[i]} ${R.final_total[i]}석`,8,-8)});
+R.regions.forEach(rg=>{c.sq(rg[1],rg[2]);c.t(rg[1],rg[2],rg[0],6,12,'font-size="10"')});c.line(-2,20,42,20,'gray',.6);c.line(20,-2,20,42,'gray',.6);m.panes.map.innerHTML=SV(W9,H9,c)}
+m.setCount(R.TL.length-1);m.T요.textContent=sumLeg(R);m.T전.textContent=fullLeg(R)}
+function drawCountLeg(k){const m=M[1],R=m.R,T=R.TL[k],nP=R.n_party,nm=R.names,C=COL,I=[...Array(nP).keys()],o=asort(T.seats_reg.map((v,i)=>v+T.seats_pr[i])),sl=R.TL.slice(0,k+1),
+a=G({w:400,h:H9,l:90,x0:0,x1:Math.max(...R.final_total)*1.5+2,y0:-.6,y1:nP-.4,title:`개표율 ${T.pct}%  (${T.n_full}/${R.n_district}곳)`,yt:yt(o.map(i=>nm[i]))}),
+b=G({ox:410,w:490,h:H9,x0:0,x1:100,y0:0,y1:Math.max(...R.final_total,...R.TL.flatMap(t=>t.seats_reg.map((v,i)=>v+t.seats_pr[i])))*1.05,title:'개표 진행에 따른 의석 변화 (점선 = 최종)',xl:'개표율 (%)',yl:'예상 총 의석'});
+stack(a,T.seats_reg,T.seats_pr,o,0,C);I.forEach(i=>{b.poly(sl.map(t=>t.pct),sl.map(t=>t.seats_reg[i]+t.seats_pr[i]),C[i%10],1);b.line(0,R.final_total[i],100,R.final_total[i],C[i%10],.8,'2 3')});
+b.leg(I.map(i=>[C[i%10],nm[i]]),'tr');m.panes.count.innerHTML=SV(900,H9,a,b);m.lb.textContent=T.pct+'%'}
+// =====================================================================
+const M=[{name:'대통령 선거',P:PP.map(p=>[p[0],p[1],p[2],p[3]]),T:[{tab:'후보',hint:'사회 0=진보 … 40=보수 / 경제 0=분배 … 40=시장',cols:[["이름",14,"str"],["사회",5,"float"],["경제",5,"float"],["출마",3,"bool"]],rows:[["공산당 후보",8,1,true],["사민당 후보",12,14,true],["국민당 후보",22,26,true],["힘의망치 후보",30,30,true],["지혜의모루 후보",28,36,true],["국가사회당 후보",38,15,false]]},{tab:'지역',hint:'',cols:regCols('투표구'),rows:REG1.map(r=>r.slice())}],
+TABS:[["final","최종 결과"],["count","개표 속보"],["exit","출구조사"],["region","지역별"],["map","이념 지도"]],run:runPres,render:renderPres,drawCount:drawCountPres,empty:'후보와 지역이 각각 1개 이상 필요합니다.',minmsg:'투표구 수는 1 이상이어야 합니다.'},
+{name:'총선 (지역구+비례)',P:PL,T:[{tab:'정당',hint:'사회 0=진보…40=보수 / 경제 0=분배…40=시장\n출마비율: 1.0=전 지역구, 0=비례만',cols:[["이름",11,"str"],["사회",4,"float"],["경제",4,"float"],["출마비율",6,"float"],["비례",3,"bool"]],rows:PARTY},{tab:'지역',hint:'',cols:regCols('지역구'),rows:REG2}],
+TABS:[["seats","최종 의석"],["votes","득표율"],["count","개표 속보"],["exit","출구조사"],["region","지역별"],["map","이념 지도"]],run:runLeg,render:renderLeg,drawCount:drawCountLeg,empty:'정당과 지역이 각각 1개 이상 필요합니다.',minmsg:'지역구 수는 1 이상이어야 합니다.',
+extra:P=>{if(P.PR_SEATS<0||P.VIABLE_TOP_N<1)throw Error('비례 의석은 0 이상, 당선권 후보 수는 1 이상이어야 합니다.')}}];
+M.forEach((m,i)=>{build(m,i);const b=document.createElement('button');b.textContent=m.name;b.onclick=()=>{$('#top').childNodes.forEach((x,j)=>{x.classList.toggle('on',i==j);M[j].A.classList.toggle('on',i==j)})};$('#top').append(b)});$('#top button').click();
+</script></body></html>
